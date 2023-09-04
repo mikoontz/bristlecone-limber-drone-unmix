@@ -19,7 +19,7 @@ get_gdrive_data <- function(object) {
   )
   
   assertthat::assert_that(
-    sum(object %in% data_links$object) == 1,
+    sum(data_links$object %in% object) == 1,
     msg = "Object name matches more than once. Something 
     awry with data-links.csv."
   )
