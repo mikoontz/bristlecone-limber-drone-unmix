@@ -93,6 +93,9 @@ get_gdrive_data <- function(object) {
     } else {
       out_path <- local_path
     }
+  } else {
+    # Needed in case not declared above (if file exists and is non-zip)
+    out_path <- local_path
   }
   
   return(out_path)
