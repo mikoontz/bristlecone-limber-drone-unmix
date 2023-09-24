@@ -43,8 +43,11 @@ fit_ranger_on_split <- function(data_split, ranger_args) {
   # Get prediction from random model 
   pred <- predict(mod, test_data)
   
+  # Confusion matrix
+  matr <- table(test_data$class, ranger::predictions(pred))
+  
   # Return the accuracy of the model fit on this split
-  pred_frac <- mean(ranger::predictions(pred) == test_data$class)
+  pred_frac <- r_k_fun(matr)
  
   return(pred_frac)
    
