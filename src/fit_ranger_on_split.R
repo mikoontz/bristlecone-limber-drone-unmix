@@ -24,6 +24,7 @@ fit_ranger_on_split <- function(data_split, ranger_args) {
   assertthat::assert_that('mtry' %in% names(ranger_args), msg = 'missing mtry')
   assertthat::assert_that('replace' %in% names(ranger_args), msg = 'missing replace')
   assertthat::assert_that('num.trees' %in% names(ranger_args), msg = 'missing num.trees')
+  assertthat::assert_that('min.node.size' %in% names(ranger_args), msg = 'missing min.node.size')
 
   # Disaggregate data into testing and training datasets
   train_data <- rsample::analysis(data_split) |> sf::st_drop_geometry()
@@ -36,6 +37,7 @@ fit_ranger_on_split <- function(data_split, ranger_args) {
     mtry = ranger_args$mtry,
     replace = ranger_args$replace,
     num.trees = ranger_args$num.trees,
+    min.node.size = ranger_args$min.node.size,
     # Don't estimate error (this will speed things up)
     oob.error = FALSE
   )
