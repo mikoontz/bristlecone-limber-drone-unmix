@@ -2,7 +2,7 @@
 ##### from orthomosaic, and doing other processing
 ##### SN - 13 Sept 2023
 
-##### Requires: terra, dplyr, tidyr, here
+##### Requires: terra, dplyr, tidyr, here, assertthat
 
 ### Load in drone band data
 
