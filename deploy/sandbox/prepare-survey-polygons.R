@@ -1,10 +1,12 @@
 ##### Script for reading in all aggie-air survey points, extracting band info
 ##### from orthomosaic, and doing other processing
-##### SN - 13 Sept 2023
+##### SN - 13 Sept 2023, updated 27 Sept 2023
 
-##### Requires: terra, dplyr, tidyr, here
+##### Requires: terra, dplyr, tidyr, here, assertthgt
 
 ### Load in drone orthomosaic w/ band data
+
+### Load in drone band data
 
 # List of all files in the src/ folder-- make sure they are just .R files and
 # get their full names!
@@ -26,65 +28,77 @@ if (!exists('ortho')) {
   ortho <- terra::rast(ortho_path)
 }
 
-### Load in field survey polygons
+# names of the bands
+names(ortho) <- c(
+  "blue_475", "green_560", "red_668", "rededge_717", "nir_842",
+  "coastalblue_444", "green_531", "red_650", "rededge_705", "rededge_740"
+)
 
-survey_path <- get_gdrive_data("fieldmap_gbbp_survey_gpkg")
-survey_poly <- terra::vect(survey_path)
+##### Load in polygon field survey data and prepare for analysis
 
-# Take out early polygons (testing points)
-survey_poly <- survey_poly[as.Date(survey_poly$CreationDate) > as.Date('2023-08-27'),]
+# Get file link for survey polygons and read in vector
+survey_poly <- get_gdrive_data('fieldmap_gbbp_survey_gpkg') |>
+  terra::vect()
 
-# Designate CRS for polygons
-survey_poly <- terra::project(survey_poly, terra::crs(ortho))
-# Add ID column to polygons
-survey_poly$ID <- 1:dim(survey_poly)[1]
+# Convert date column to a date
+survey_poly$collection_date <- as.Date(survey_poly$collection_date)
 
-### Extract bands from ortho at polygon locations
+# Remove test observations (taken Aug 25)
+survey_poly <- survey_poly[survey_poly$collection_date > as.Date('2023-08-28'),]
+
+nrow(survey_poly)
+
+# Add an ID column for indexing
+survey_poly$ID <- 1:nrow(survey_poly)
+
+# Re-set coordinate system if needed
+if (terra::crs(survey_poly) != terra::crs(ortho)) {
+  survey_poly <- terra::project(survey_poly, terra::crs(ortho))
+}
+
+
+##### Extract spectral bands from orthomosaic and create object for splitting
+##### and model fitting
 
 poly_bands <- terra::extract(ortho, survey_poly, ID = TRUE)
 
-nrow(poly_bands)
-
-# Test to see if any polygons are missing (if so, remove them)
-# (will happen with cropped orthomosaics...)
-message(sum(!complete.cases(poly_bands)), " points with missing values")
-# Remove these points
+# Remove NAs
 poly_bands <- poly_bands[complete.cases(poly_bands),]
+# (NOTE: this step will preserve polygons if there is a fraction of them that
+# have NAs - only the NA rows will be removed, but the rows that did have
+# extracted data will be preserved - this may create a biased sample)
 
-# Number of remaining points
-length(unique(poly_bands$ID))
+# Merge in classifications and prepare column for model
+poly_bands <- merge(poly_bands, survey_poly[,c("ID", "cover_type")]) |>
+  dplyr::rename(class = cover_type) |>
+  dplyr::mutate(class = factor(class))
 
-# Merge in class ids
-poly_bands <- terra::merge(poly_bands, survey_poly[,c("ID", "cover_type")])
+head(poly_bands)
 
-# Add other band info
-
-poly_bands <- dplyr::mutate(
-  poly_bands,
-  ndvi_650 = (nir_842 - red_650) / (nir_842 + red_650),
-  ndvi_688 = (nir_842 - red_668) / (nir_842 + red_668),
-  ndre_705 = (nir_842 - rededge_705) / (nir_842 + rededge_705),
-  ndre_717 = (nir_842 - rededge_717) / (nir_842 + rededge_717),
-  ndre_740 = (nir_842 - rededge_740) / (nir_842 + rededge_740),
-  mndvi    = (rededge_740 - rededge_705) / (rededge_740 + rededge_705 - 2*coastalblue_444),
-  pri      = (green_531 - green_560) / (green_531 + green_560)
-)
-
-### Aggregate polygons into a mean value for each polygon
-
-poly_means <- poly_bands |>
-  dplyr::group_by(ID, cover_type) |>
-  dplyr::summarise(dplyr::across(everything(), mean))
-  
-
-# in future, would be good to add other summary statistics
-
-# tidyr::pivot_longer(
-#   poly_bands, cols = -c(ID, cover_type),
-#   names_to = 'band', values_to = 'refl'
-# ) |>
-#   dplyr::group_by(ID, band, cover_type) |>
-#   dplyr::summarise(mean_refl = mean(refl))
-
-# head(poly_means)
+# Add in additional band information and summarise
+poly_bands <-  poly_bands |>
+  dplyr::mutate(
+    ndvi_650 = (nir_842 - red_650) / (nir_842 + red_650),
+    ndvi_688 = (nir_842 - red_668) / (nir_842 + red_668),
+    ndre_705 = (nir_842 - rededge_705) / (nir_842 + rededge_705),
+    ndre_717 = (nir_842 - rededge_717) / (nir_842 + rededge_717),
+    ndre_740 = (nir_842 - rededge_740) / (nir_842 + rededge_740),
+    mndvi    = (rededge_740 - rededge_705) / (rededge_740 + rededge_705 - 2*coastalblue_444),
+    pri      = (green_531 - green_560) / (green_531 + green_560)
+  ) |>
+  # Filter out cases that will cause NaNs in MNDVI
+  dplyr::filter(rededge_740 + rededge_705 != 2*coastalblue_444) |>
+  # Now, get summary statistics for each polygon-band combinatino
+  dplyr::group_by(ID, class) |>
+  dplyr::summarise(
+    across(
+      # For all columns (not specified above - should be solely bands)
+      .cols = tidyr::everything(),
+      # Get mean and standard deviation
+      .fns = list(mean = mean, sd = sd),
+      .names = "{.col}.{.fn}"
+    ),
+    # Also, for each *polygon* (not band) get number of observatiojns
+    n = dplyr::n()
+  )
 
