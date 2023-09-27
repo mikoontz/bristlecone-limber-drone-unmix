@@ -7,7 +7,7 @@
 ##### googledrive (loading google drive data)
 ##### terra (for handling ortho and survey points)
 ##### dplyr and tidyr (data manipulation)
-##### spatialsample, rsample, sf (for splitting data into test/train
+##### spatialsample, rsample, sf (for splitting data into test/train)
 ##### ranger (for fitting models)
 ##### Optional:
 ##### parallel (run model fits in parallel)
@@ -36,28 +36,9 @@ for(i in seq_along(src)) {
 # dataset into a single vector object)
 source('deploy/sandbox/prepare-survey-points.R')
 
-# Namespace should now include `all_shape`
-
-### Declare other global variables
-
-# Run models in parallel?
-parallel.flag <- TRUE
-# number of cores to run with
-parallel.cores <- 4
-
-# Run models with a defined seed?
-seed <- NULL
-
-# Trials per hyperparameter combination
-trials.per <- 3
-# v (folds in spatial sampler) to try
-v <- (2:5) * 2
-# mtry (variables to try per node split)
-mtry <- 1 + (1:5)*2
-# num.trees (number of trees to test)
-num.trees <- c(100, 500, 1000)
-# replace (sample with or without replacement)
-replace <- c(TRUE, FALSE)
+# Namespace should now include `all_shape` and `point_bands`
+# `all_shape` has coordinates (needed for spatial sample)
+# and `point_bands` 
 
 ##### Prepare survey for test/train splitting and model fitting
 
@@ -74,6 +55,31 @@ points_sf <- point_bands |>
     # Get coordinate reference system - matches orthomosaic
     crs = terra::crs(ortho) 
   )
+
+### Declare other global variables
+
+# Run models in parallel?
+parallel.flag <- TRUE
+# number of cores to run with
+parallel.cores <- 4
+
+# Run models with a defined seed?
+seed <- NULL
+
+# Trials per hyperparameter combination
+trials.per <- 50
+# v (folds in spatial sampler) to try
+v <- (1:3)*4
+# mtry (variables to try per node split)
+mtry <- 3 + (0:3)*4
+# num.trees (number of trees to test)
+num.trees <- c(100, 500)
+# min.node.size (tree complexity)
+min.node.size <- 1 + 2*(0:2)
+# replace (sample with or without replacement)
+replace <- c(TRUE, FALSE)
+# sampler
+sampler <- c('block', 'cluster')
   
 ##### Initiate an object defining hyperparameters to tune
 
@@ -82,7 +88,9 @@ fit.iterator <- expand.grid(
   v = v,
   mtry = mtry,
   num.trees = num.trees,
-  replace = replace
+  replace = replace,
+  min.node.size = min.node.size,
+  sampler = sampler
 )
 
 # Add an iter for easy parallelization and merging
@@ -106,7 +114,11 @@ if (parallel.flag) {
     # Run a function that splits the data on the appropriate number of folds
     # and fits a model at the given hyperparameters
     FUN = function(specs) {
-      data_split <- spatialsample::spatial_clustering_cv(points_sf, v = specs$v)
+      if (specs$sampler %in% 'cluster') {
+        data_split <- spatialsample::spatial_clustering_cv(points_sf, v = specs$v)
+      } else {
+        data_split <- spatialsample::spatial_block_cv(points_sf, v = specs$v)
+      }
       scores     <- sapply(data_split$splits, fit_ranger_on_split, ranger_args = specs)
       # Return a data frame for easy merging
       return(data.frame(scores = mean(scores), iter = specs$iter))
@@ -123,7 +135,11 @@ if (parallel.flag) {
     # and fits a model at the given hyperparameters
     lapply(
       FUN = function(specs) {
-        data_split <- spatialsample::spatial_clustering_cv(points_sf, v = specs$v)
+        if (specs$sampler %in% 'cluster') {
+          data_split <- spatialsample::spatial_clustering_cv(points_sf, v = specs$v)
+        } else {
+          data_split <- spatialsample::spatial_block_cv(points_sf, v = specs$v)
+        }        
         scores     <- sapply(data_split$splits, fit_ranger_on_split, ranger_args = specs)
         # Return a data frame for easy merging
         return(data.frame(scores = mean(scores), iter = specs$iter))
@@ -136,9 +152,35 @@ if (parallel.flag) {
 # Merge together and get a summary of mean score and variance around mean for
 # parameter combinations
 model_scores <- merge(fit.iterator, pred.score, by = 'iter') |>
-  dplyr::group_by(v, mtry, num.trees, replace) |>
+  dplyr::group_by(v, mtry, num.trees, min.node.size, replace, sampler) |>
   dplyr::summarise(
-    score.bar = mean(scores),
-    score.var = var(scores),
+    score.bar = mean(scores, na.rm = TRUE),
+    score.var = var(scores, na.rm = TRUE),
     n = dplyr::n()
   )
+
+
+##### Use ggplot to make a plot of results
+
+library(ggplot2)
+
+ggplot(model_scores |> dplyr::mutate(v = factor(v))) +
+  geom_line(
+    aes(
+      x = mtry, y = score.bar,
+      colour = v, linetype = replace
+    ),
+    linewidth = 1.2
+  ) +
+  geom_ribbon(
+    aes(
+      x = mtry,
+      ymin = score.bar - 2*sqrt(score.var/n),
+      ymax = score.bar + 2*sqrt(score.var/n),
+      fill = v, group = interaction(v, replace)
+    ),
+    alpha = 0.1
+  ) +
+  facet_grid(min.node.size + num.trees ~ sampler + replace)
+
+detach(packages::ggplot2)
