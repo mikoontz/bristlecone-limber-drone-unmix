@@ -31,6 +31,14 @@ for(i in seq_along(src)) {
   source(src[i])
 }
 
+##### 
+
+# Prepare survey polygons for analysis (downloads ortho and whole point survey
+# dataset, and concatenates point survey dataset into a single data frame with
+# mean and standard deviation of each band or index for each polygon in the
+# dataset
+source('deploy/sandbox/prepare-survey-polygons.R')
+
 ##### Set up data for splitting into test/train
 
 # Need to get spatial information in here
