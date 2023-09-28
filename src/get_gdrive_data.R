@@ -94,8 +94,10 @@ get_gdrive_data <- function(object) {
       out_path <- local_path
     }
   } else {
-    # Needed in case not declared above (if file exists and is non-zip)
-    out_path <- local_path
+    # Needed in case not declared above (if file exists and is not zip)
+    # gsub() is needed in case path name is still a .zip file from above
+    # (if it is not a .zip, then the gsub() won't do anything)
+    out_path <- sub(pattern = "\\.zip$", replacement = "", x = local_path)
   }
   
   return(out_path)
