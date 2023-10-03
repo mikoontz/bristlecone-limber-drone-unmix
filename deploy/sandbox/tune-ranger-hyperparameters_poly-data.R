@@ -56,6 +56,7 @@ poly_sf <- merge(
   x = poly_bands, y = centroid_poly,
   by.x = 'ID', by.y = 'geom'
 ) |>
+  dplyr::select(-c(ID, n)) |>
   # Get sf info for spatial sample
   sf::st_as_sf(
     # Specify coordinates
