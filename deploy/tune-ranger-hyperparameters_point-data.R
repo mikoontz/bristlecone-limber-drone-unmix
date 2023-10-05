@@ -1,7 +1,7 @@
-##### Script for hyper-parameter tuning using grid-search on ranger random
-##### forests using the polygon data (from Bentz crew surveys in 2023)
-##### SN - finalized-ish 27 Sept 2023
+##### Script for doing hyperparameter tuning on the survey point dataset
 #####
+##### init SN - 21 Sept 2023, finalized 6 Oct 2023
+##### 
 ##### Requires:
 ##### here (loading in data), assertthat (data checks)
 ##### googledrive (loading google drive data)
@@ -31,44 +31,34 @@ for(i in seq_along(src)) {
   source(src[i])
 }
 
-##### 
+# Prepare survey points for analysis
+# (downloads ortho and whole point survey dataset, and concatenates point survey
+# dataset into a single vector object)
+source('deploy/prepare-survey-points.R')
 
-# Prepare survey polygons for analysis (downloads ortho and whole point survey
-# dataset, and concatenates point survey dataset into a single data frame with
-# mean and standard deviation of each band or index for each polygon in the
-# dataset
-source('deploy/sandbox/prepare-survey-polygons.R')
+# Namespace should now include `all_shape` and `point_bands`
+# `all_shape` has coordinates (needed for spatial sample)
+# and `point_bands` 
 
-##### Set up data for splitting into test/train
+##### Prepare survey for test/train splitting and model fitting
 
-# Need to get spatial information in here
-# Extract centroid for each polygon
-centroid_poly <- terra::centroids(survey_poly) |>
-  # Get geometric information (incl. coordinates) with geom()
-  terra::geom() |>
-  # Get geom (ID), x, and y columns out of this geom object
-  (\(geom_obj) geom_obj[,c("geom", "x", "y")])() |>
-  # Convert to data frame
-  as.data.frame()
-  
-# Merge objects together and convert to sf for split  
-poly_sf <- merge(
-  x = poly_bands, y = centroid_poly,
-  by.x = 'ID', by.y = 'geom'
-) |>
-  dplyr::select(-c(ID, n)) |>
-  # Get sf info for spatial sample
+# Add spatial geometry data needed for spatial sampling
+points_sf <- point_bands |> 
+  # Remove unnecessary columns
+  # (ID was used in the extraction step, ClassUpdat was the classification in
+  # the raw data)
+  dplyr::select(-c(ID, ClassUpdat)) |> 
+  # Convert class into a factor (for classification)
+  dplyr::mutate(class = factor(class)) |>
+  # Convert to sf for spatial split
   sf::st_as_sf(
     # Specify coordinates
     coords = c("x", "y"),
     # Get coordinate reference system - matches orthomosaic
-    crs = terra::crs(survey_poly) 
+    crs = terra::crs(ortho) 
   )
 
-##### Split and fit models
-
-### Declare variables for grid search
-### (these are all model fitting parameters)
+### Declare other global variables
 
 # Run models in parallel?
 parallel.flag <- TRUE
@@ -81,9 +71,9 @@ seed <- NULL
 # Trials per hyperparameter combination
 trials.per <- 25
 # v (folds in spatial sampler) to try
-v <- (2:4)*3 # dont' go higher than 12
+v <- (1:3)*4
 # mtry (variables to try per node split)
-mtry <- (2:4)*6
+mtry <- 3 + (0:3)*4
 # num.trees (number of trees to test)
 num.trees <- c(100, 500)
 # min.node.size (tree complexity)
@@ -92,8 +82,8 @@ min.node.size <- 1 + 2*(0:2)
 replace <- c(TRUE, FALSE)
 # sampler
 sampler <- c('block', 'cluster')
-
-# Create object with settings for each model fit
+  
+##### Initiate an object defining hyperparameters to tune
 
 fit.iterator <- expand.grid(
   i = 1:trials.per,
@@ -105,7 +95,7 @@ fit.iterator <- expand.grid(
   sampler = sampler
 )
 
-# Add an iter for easy parallelization and merging
+# Add an iteration column for easy parallelization and merging
 
 fit.iterator$iter <- 1:nrow(fit.iterator)
 
@@ -127,13 +117,14 @@ if (parallel.flag) {
     # and fits a model at the given hyperparameters
     FUN = function(specs) {
       if (specs$sampler %in% 'cluster') {
-        data_split <- spatialsample::spatial_clustering_cv(poly_sf, v = specs$v)
+        data_split <- spatialsample::spatial_clustering_cv(points_sf, v = specs$v)
       } else {
-        data_split <- spatialsample::spatial_block_cv(poly_sf, v = specs$v)
+        data_split <- spatialsample::spatial_block_cv(points_sf, v = specs$v)
       }
       scores     <- sapply(data_split$splits, fit_ranger_on_split, ranger_args = specs)
       # Return a data frame for easy merging
-      return(data.frame(scores = mean(scores), iter = specs$iter))
+      # (remove NAs for the cases where all of fold/preds are in same class)
+      return(data.frame(scores = mean(scores, na.rm = TRUE), iter = specs$iter))
     },
     # make sure parallel.cores is greater than 1 (and declared)
     mc.cores = parallel.cores
@@ -148,19 +139,22 @@ if (parallel.flag) {
     lapply(
       FUN = function(specs) {
         if (specs$sampler %in% 'cluster') {
-          data_split <- spatialsample::spatial_clustering_cv(poly_sf, v = specs$v)
+          data_split <- spatialsample::spatial_clustering_cv(points_sf, v = specs$v)
         } else {
-          data_split <- spatialsample::spatial_block_cv(poly_sf, v = specs$v)
+          data_split <- spatialsample::spatial_block_cv(points_sf, v = specs$v)
         }        
         scores     <- sapply(data_split$splits, fit_ranger_on_split, ranger_args = specs)
         # Return a data frame for easy merging
-        return(data.frame(scores = mean(scores), iter = specs$iter))
+        # (remove NAs for the cases where all of fold/preds are in same class)
+        return(data.frame(scores = mean(scores, na.rm = TRUE), iter = specs$iter))
       }
     ) |>
     # Bind together into dataframe
     do.call(what = rbind)
 }
 
+# Merge together and get a summary of mean score and variance around mean for
+# parameter combinations
 model_scores <- merge(fit.iterator, pred.score, by = 'iter') |>
   dplyr::group_by(v, mtry, num.trees, min.node.size, replace, sampler) |>
   dplyr::summarise(
@@ -168,6 +162,7 @@ model_scores <- merge(fit.iterator, pred.score, by = 'iter') |>
     score.var = var(scores, na.rm = TRUE),
     n = dplyr::n()
   )
+
 
 ##### Use ggplot to make a plot of results
 
@@ -190,6 +185,6 @@ ggplot(model_scores |> dplyr::mutate(v = factor(v))) +
     ),
     alpha = 0.1
   ) +
-  facet_grid(min.node.size ~ num.trees + sampler)
+  facet_grid(min.node.size + num.trees ~ sampler + replace)
 
 detach(packages::ggplot2)

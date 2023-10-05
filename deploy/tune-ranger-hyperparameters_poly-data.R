@@ -1,6 +1,6 @@
 ##### Script for hyper-parameter tuning using grid-search on ranger random
 ##### forests using the polygon data (from Bentz crew surveys in 2023)
-##### SN - finalized-ish 27 Sept 2023
+##### SN - finalized 5 Oct. 2023
 #####
 ##### Requires:
 ##### here (loading in data), assertthat (data checks)
@@ -37,11 +37,11 @@ for(i in seq_along(src)) {
 # dataset, and concatenates point survey dataset into a single data frame with
 # mean and standard deviation of each band or index for each polygon in the
 # dataset
-source('deploy/sandbox/prepare-survey-polygons.R')
+source('deploy/prepare-survey-polygons.R')
 
 ##### Set up data for splitting into test/train
 
-# Need to get spatial information in here
+# Need to get spatial information for spatial sampling
 # Extract centroid for each polygon
 centroid_poly <- terra::centroids(survey_poly) |>
   # Get geometric information (incl. coordinates) with geom()
@@ -51,12 +51,11 @@ centroid_poly <- terra::centroids(survey_poly) |>
   # Convert to data frame
   as.data.frame()
   
-# Merge objects together and convert to sf for split  
+# Merge band data frame and centroids, then convert to sf for sampling 
 poly_sf <- merge(
   x = poly_bands, y = centroid_poly,
   by.x = 'ID', by.y = 'geom'
 ) |>
-  dplyr::select(-c(ID, n)) |>
   # Get sf info for spatial sample
   sf::st_as_sf(
     # Specify coordinates
@@ -81,7 +80,7 @@ seed <- NULL
 # Trials per hyperparameter combination
 trials.per <- 25
 # v (folds in spatial sampler) to try
-v <- (2:4)*3 # dont' go higher than 12
+v <- (2:4)*3 # going higher than 12 will cause splits that are too small
 # mtry (variables to try per node split)
 mtry <- (2:4)*6
 # num.trees (number of trees to test)
@@ -133,7 +132,8 @@ if (parallel.flag) {
       }
       scores     <- sapply(data_split$splits, fit_ranger_on_split, ranger_args = specs)
       # Return a data frame for easy merging
-      return(data.frame(scores = mean(scores), iter = specs$iter))
+      # (remove NAs for the cases where all of fold/preds are in same class)
+      return(data.frame(scores = mean(scores, na.rm = TRUE), iter = specs$iter))
     },
     # make sure parallel.cores is greater than 1 (and declared)
     mc.cores = parallel.cores
@@ -154,13 +154,16 @@ if (parallel.flag) {
         }        
         scores     <- sapply(data_split$splits, fit_ranger_on_split, ranger_args = specs)
         # Return a data frame for easy merging
-        return(data.frame(scores = mean(scores), iter = specs$iter))
+        # (remove NAs for the cases where all of fold/preds are in same class)
+        return(data.frame(scores = mean(scores, na.rm = TRUE), iter = specs$iter))
       }
     ) |>
     # Bind together into dataframe
     do.call(what = rbind)
 }
 
+# Merge together data frame with specifications (fit.iterator) and scores,
+# then summarise to get mean and variance of score for each group
 model_scores <- merge(fit.iterator, pred.score, by = 'iter') |>
   dplyr::group_by(v, mtry, num.trees, min.node.size, replace, sampler) |>
   dplyr::summarise(
@@ -192,4 +195,4 @@ ggplot(model_scores |> dplyr::mutate(v = factor(v))) +
   ) +
   facet_grid(min.node.size ~ num.trees + sampler)
 
-detach(packages::ggplot2)
+detach(package:ggplot2)
