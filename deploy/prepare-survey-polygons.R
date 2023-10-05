@@ -1,12 +1,18 @@
 ##### Script for reading in all aggie-air survey points, extracting band info
 ##### from orthomosaic, and doing other processing
-##### SN - 13 Sept 2023, updated 27 Sept 2023
+##### SN - 13 Sept 2023, finalized 3 Oct 2023
 
-##### Requires: terra, dplyr, tidyr, here, assertthgt
+##### Requires: terra, dplyr, tidyr, here, assertthat
+#####
+##### Output: `poly_bands` is a data frame with features (bands, indices, and
+##### coordinates), with one row for each survey polygon.
+##### note that this gets summary statistics (mean, sd) as well as number of
+##### cells (integer - not dealing with partial-overlaps differently) of each
+##### band for each polygon
+##### (The namespace will also have a processed version of the survey polygons -
+##### `survey_poly`)
 
 ### Load in drone orthomosaic w/ band data
-
-### Load in drone band data
 
 # List of all files in the src/ folder-- make sure they are just .R files and
 # get their full names!
@@ -34,7 +40,7 @@ names(ortho) <- c(
   "coastalblue_444", "green_531", "red_650", "rededge_705", "rededge_740"
 )
 
-##### Load in polygon field survey data and prepare for analysis
+### Load in polygon field survey data and prepare for analysis
 
 # Get file link for survey polygons and read in vector
 survey_poly <- get_gdrive_data('fieldmap_gbbp_survey_gpkg') |>
@@ -57,8 +63,8 @@ if (terra::crs(survey_poly) != terra::crs(ortho)) {
 }
 
 
-##### Extract spectral bands from orthomosaic and create object for splitting
-##### and model fitting
+### Extract spectral bands from orthomosaic and create object for splitting
+### and model fitting
 
 poly_bands <- terra::extract(ortho, survey_poly, ID = TRUE)
 
@@ -98,7 +104,7 @@ poly_bands <-  poly_bands |>
       .fns = list(mean = mean, sd = sd),
       .names = "{.col}.{.fn}"
     ),
-    # Also, for each *polygon* (not band) get number of observatiojns
+    # Also, for each *polygon* (not band) get number of observations
     n = dplyr::n()
   )
 

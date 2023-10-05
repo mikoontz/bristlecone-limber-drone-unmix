@@ -1,10 +1,15 @@
 ##### Script for reading in all aggie-air survey points, extracting band info
 ##### from orthomosaic, and doing other processing
-##### SN - 13 Sept 2023
+##### SN - 13 Sept 2023, copied to deploy 3 Oct 2023
 
 ##### Requires: terra, dplyr, tidyr, here, assertthat
+#####
+##### Output: `point_bands` is a data frame with features (bands, indices, and
+##### coordinates), with one row for each survey point.
+##### (The namespace will also have individual shape objects as well as an
+##### object, `all_shape`, with all points)
 
-### Load in drone band data
+### Setup
 
 # List of all files in the src/ folder-- make sure they are just .R files and
 # get their full names!
@@ -18,6 +23,8 @@ for(i in seq_along(src)) {
           " function...")
   source(src[i])
 }
+
+### Load in orthomosaic
 
 # call our get_gdrive_data() function to get the multispec_ortho data object
 # from the Google Drive
@@ -69,11 +76,19 @@ point_bands <- point_bands[complete.cases(point_bands),]
 head(point_bands)
 
 # Merge in classification info
+# `ClassUpdat` is the column that has the classifications in the point dataset
+#   this might need to be changed for reproducibility
 point_bands <- terra::merge(point_bands, all_shape[,c("ID", "ClassUpdat")])
 
 head(point_bands)
 
-# Add new class labels
+# Add new class labels; add these to column `class
+#   Assume for our models that we want classes for
+#   (1) living bristlecones (pilo)
+#   (2) living limber pines (pifl)
+#   (3) living other trees (firs, etc.)
+#   (4) dead trees
+
 point_bands$class <- dplyr::case_when(
   # All dead vegetation is dead
   grepl('dead$', point_bands$ClassUpdat) ~ 'dead',
@@ -89,7 +104,7 @@ point_bands$class <- dplyr::case_when(
 with(point_bands, table(ClassUpdat, class))
 table(point_bands$class)
 
-# Add composite features (same as aggieair report)
+# Add composite measures (same ones used in aggieair report)
 
 point_bands <- point_bands |>
   dplyr::mutate(
@@ -102,7 +117,7 @@ point_bands <- point_bands |>
     pri      = (green_531 - green_560) / (green_531 + green_560)
   )
 
-# Add coordinates (just in case)
+# Add coordinates (will be used for spatial sampling)
 point_bands <- merge(
   point_bands, as.data.frame(terra::geom(all_shape))[,c("geom", "x", "y")],
   by.x = 'ID', by.y = "geom"
